@@ -1,0 +1,151 @@
+name: "Auto Update Docker"
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 16 * * *"
+env:
+  TZ: Asia/Shanghai
+  # Use docker.io for Docker Hub if empty
+  REGISTRY: docker.io
+  # github.repository as <account>/<repo>
+  IMAGE_NAME: ${{ github.repository }}
+
+
+jobs:
+  job_init:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Initialization environment
+        run: |
+          sudo timedatectl set-timezone "$TZ"
+
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 0
+        
+  job_auto_update_docker:
+    if: ${{ always() }}
+    needs: job_init
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    name: Auto-update-${{ matrix.pakcages }} 
+    strategy:
+      fail-fast: false
+      matrix:
+        pakcages: [ caddy ]
+        include:
+          - pakcages: caddy
+            release_api_command: curl -sL https://api.github.com/repos/caddyserver/caddy/releases | jq -r 'map(select(.prerelease|not)) | first | .tag_name' | sed -e 's/^v//'
+            tag: latest
+
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Initialization environment
+        run: |
+          cd && mkdir -p packages && cd packages
+          sudo timedatectl set-timezone "$TZ"
+
+
+      - name: Get ${{ matrix.pakcages }} Version
+        id: getVersion
+        run: |
+          echo VERSION=$(${{ matrix.release_api_command }}) >> $GITHUB_OUTPUT
+
+
+      - name: Compare Version 
+        id: cacheVersion
+        uses: actions/cache@v4
+        if: steps.getVersion.outputs.VERSION != '' && !cancelled()
+        with:
+          path: .VERSION
+          key: Caddy-Version:v${{ steps.getVersion.outputs.VERSION }}
+
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        if: steps.cacheVersion.outputs.cache-hit != 'true' && !cancelled()
+
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        if: steps.cacheVersion.outputs.cache-hit != 'true' && !cancelled()
+
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Login to ${{ env.REGISTRY }} registry
+        uses: docker/login-action@v3
+        if: steps.cacheVersion.outputs.cache-hit != 'true' && !cancelled()
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        if: steps.cacheVersion.outputs.cache-hit != 'true' && !cancelled()
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+  
+  
+        # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        if: steps.cacheVersion.outputs.cache-hit != 'true' && !cancelled()
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+
+      # Build and push Docker image with Buildx (don't push on PR)
+      # https://github.com/docker/build-push-action
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        if: steps.cacheVersion.outputs.cache-hit != 'true' && !cancelled()
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm/v7,linux/arm64/v8
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflaredns:${{ steps.getVersion.outputs.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflaredns:${{ matrix.tag }}
+            ghcr.io/${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflaredns:${{ steps.getVersion.outputs.VERSION }}
+            ghcr.io/${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflaredns:${{ matrix.tag }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            TAG=${{ steps.getVersion.outputs.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+
+      - name: Save New Version
+        if: steps.build.outputs.digest != ' ' && !cancelled()
+        run: |
+          echo v${{ steps.getVersion.outputs.VERSION }} | tee .VERSION
+  
