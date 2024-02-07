@@ -2,7 +2,7 @@
 
 ARG TAG
 
-FROM --platform=$BUILDPLATFORM caddy:$TAG-builder-alpine AS builder
+FROM --platform=$BUILDPLATFORM caddy:builder-alpine AS builder
 
 ARG TARGETOS TARGETARCH
 
@@ -12,6 +12,6 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
     --with github.com/WeidiDeng/caddy-cloudflare-ip \
     --with github.com/mholt/caddy-dynamicdns
 
-FROM caddy:$TAG-alpine
+FROM caddy:alpine
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
