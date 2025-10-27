@@ -52,7 +52,7 @@ jobs:
         pakcages: [ caddy ]
         include:
           - pakcages: caddy
-            release_api_command: curl -sL https://api.github.com/repos/caddyserver/caddy/releases | jq -r 'map(select(.prerelease|not)) | first | .tag_name' | sed -e 's/^v//'
+            release_api_command: curl -fsL https://api.github.com/repos/caddyserver/caddy/releases | jq -r 'map(select(.prerelease|not)) | first | .tag_name' | sed -e 's/^v//'
             tag: latest
 
 
@@ -70,8 +70,18 @@ jobs:
       - name: Get ${{ matrix.pakcages }} Version
         id: getVersion
         run: |
-          echo VERSION=$(${{ matrix.release_api_command }}) >> $GITHUB_OUTPUT
+          if ! VERSION=$(${{ matrix.release_api_command }}); then
+            echo "::error::Curl failed with status $?"
+            exit 1
+          fi
 
+          if [ -n "$VERSION" ]; then
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "Valid version: $VERSION"
+          else
+            echo "::error::Received empty version"
+            exit 1
+          fi
 
       - name: Compare Version 
         id: cacheVersion
